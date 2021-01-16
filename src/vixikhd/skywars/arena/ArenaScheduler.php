@@ -97,18 +97,8 @@ class ArenaScheduler extends Task
 
                 switch ($this->restartTime) {
                     case 0:
-
-                        foreach ($this->plugin->players as $player) {
-                            $player->teleport($this->plugin->plugin->getServer()->getDefaultLevel()->getSpawnLocation());
-
-                            $player->getInventory()->clearAll();
-                            $player->getArmorInventory()->clearAll();
-                            $player->getCursorInventory()->clearAll();
-
-                            $player->setFood(20);
-                            $player->setHealth(20);
-
-                            $player->setGamemode($this->plugin->plugin->getServer()->getDefaultGamemode());
+                        foreach ($this->plugin->getPlayers() as $player) {
+                            $this->plugin->disconnectPlayer($player);
                         }
                         $this->plugin->loadArena(true);
                         $this->reloadTimer();
