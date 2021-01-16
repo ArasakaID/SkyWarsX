@@ -47,7 +47,10 @@ class Arena implements Listener
     /** @var Player[] $players */
     public array $players = [];
 
-    public array $toRespawn = [];
+    /** @var Player[] $spectators */
+    public array $spectators = [];
+
+    public array $playerSpawn = [];
 
     public ?Level $level = null;
 
@@ -80,7 +83,7 @@ class Arena implements Listener
             return;
         }
 
-        if ($this->inGame($player)) {
+        if ($this->isInGame($player)) {
             $player->sendMessage("§c> You are already in game!");
             return;
         }
@@ -88,9 +91,9 @@ class Arena implements Listener
         $selected = false;
         for ($lS = 1; $lS <= $this->data["slots"]; $lS++) {
             if (!$selected) {
-                if (!isset($this->players[$index = "spawn-{$lS}"])) {
+                if (!isset($this->playerSpawn[$index = "spawn-{$lS}"])) {
                     $player->teleport(Position::fromObject(Vector3::fromString($this->data["spawns"][$index]), $this->level));
-                    $this->players[$index] = $player;
+                    $this->playerSpawn[$index] = $player;
                     $selected = true;
                 }
             }
@@ -99,7 +102,6 @@ class Arena implements Listener
         $player->getInventory()->clearAll();
         $player->getArmorInventory()->clearAll();
         $player->getCursorInventory()->clearAll();
-
         $player->setGamemode($player::ADVENTURE);
         $player->setHealth(20);
         $player->setFood(20);
@@ -107,61 +109,36 @@ class Arena implements Listener
         $this->broadcastMessage("§a> {$player->getName()} joined the game! §7[" . count($this->players) . "/{$this->data["slots"]}]");
     }
 
-    public function disconnectPlayer(Player $player, string $quitMsg = "", bool $death = false)
+    public function disconnectPlayer(Player $player)
     {
-        switch ($this->phase) {
-            case Arena::PHASE_LOBBY:
-                $index = "";
-                foreach ($this->players as $i => $p) {
-                    if ($p->getId() == $player->getId()) {
-                        $index = $i;
-                    }
-                }
-                if ($index != "") {
-                    unset($this->players[$index]);
-                }
-                break;
-            default:
-                unset($this->players[$player->getName()]);
-                break;
-        }
+        if(isset($this->playerSpawn[$player->getName()]))
+            unset($this->playerSpawn[$player->getName()]);
+        if(isset($this->players[$player->getName()]))
+            unset($this->players[$player->getName()]);
+        if(isset($this->spectators[$player->getName()]))
+            unset($this->spectators[$player->getName()]);
 
         $player->removeAllEffects();
-
         $player->setGamemode($this->plugin->getServer()->getDefaultGamemode());
-
         $player->setHealth(20);
         $player->setFood(20);
-
         $player->getInventory()->clearAll();
         $player->getArmorInventory()->clearAll();
         $player->getCursorInventory()->clearAll();
-
         $player->teleport($this->plugin->getServer()->getDefaultLevel()->getSpawnLocation());
-
-        if (!$death) {
-            $this->broadcastMessage("§a> {$player->getName()} left the game. §7[" . count($this->players) . "/{$this->data["slots"]}]");
-        }
-
-        if ($quitMsg != "") {
-            $player->sendMessage("§a> $quitMsg");
-        }
     }
 
     public function startGame()
     {
-        $players = [];
         foreach ($this->players as $player) {
-            $players[$player->getName()] = $player;
             $player->setGamemode($player::SURVIVAL);
+            $inv = $player->getInventory();
+            $inv->clearAll();
         }
 
-
-        $this->players = $players;
         $this->phase = 1;
 
         $this->fillChests();
-
         $this->broadcastMessage("Game Started!", self::MSG_TITLE);
     }
 
@@ -183,25 +160,37 @@ class Arena implements Listener
         $this->phase = self::PHASE_RESTART;
     }
 
-    public function inGame(Player $player): bool
+    public function isPlaying(Player $player): bool
     {
-        switch ($this->phase) {
-            case self::PHASE_LOBBY:
-                $inGame = false;
-                foreach ($this->players as $players) {
-                    if ($players->getId() == $player->getId()) {
-                        $inGame = true;
-                    }
-                }
-                return $inGame;
-            default:
-                return isset($this->players[$player->getName()]);
-        }
+        if(isset($this->players[$player->getName()]))
+            return true;
+        return false;
+    }
+
+    public function isSpectator(Player $player): bool
+    {
+        if(isset($this->spectators[$player->getName()]))
+            return true;
+        return false;
+    }
+
+    public function isInGame(Player $player): bool
+    {
+        if($this->isPlaying($player))
+            return true;
+        if($this->isSpectator($player))
+            return true;
+        return false;
+    }
+
+    public function getPlayers(): array
+    {
+        return $this->players + $this->spectators;
     }
 
     public function broadcastMessage(string $message, int $id = 0, string $subMessage = "")
     {
-        foreach ($this->players as $player) {
+        foreach ($this->getPlayers() as $player) {
             switch ($id) {
                 case self::MSG_MESSAGE:
                     $player->sendMessage($message);
@@ -270,7 +259,7 @@ class Arena implements Listener
     {
         if ($this->phase != self::PHASE_LOBBY) return;
         $player = $event->getPlayer();
-        if ($this->inGame($player)) {
+        if ($this->isPlaying($player)) {
             $index = null;
             foreach ($this->players as $i => $p) {
                 if ($p->getId() == $player->getId()) {
@@ -289,7 +278,7 @@ class Arena implements Listener
 
         if (!$player instanceof Player) return;
 
-        if ($this->inGame($player) && $this->phase == self::PHASE_LOBBY) {
+        if ($this->isPlaying($player) && $this->phase === self::PHASE_LOBBY) {
             $event->setCancelled(true);
         }
     }
@@ -299,7 +288,7 @@ class Arena implements Listener
         $player = $event->getPlayer();
         $block = $event->getBlock();
 
-        if ($this->inGame($player) && $event->getBlock()->getId() == Block::CHEST && $this->phase == self::PHASE_LOBBY) {
+        if ($this->isPlaying($player) && $event->getBlock()->getId() == Block::CHEST && $this->phase == self::PHASE_LOBBY) {
             $event->setCancelled(true);
             return;
         }
@@ -334,13 +323,14 @@ class Arena implements Listener
     {
         $player = $event->getPlayer();
 
-        if (!$this->inGame($player)) return;
+        if (!$this->isPlaying($player)) return;
 
         foreach ($event->getDrops() as $item) {
             $player->getLevel()->dropItem($player, $item);
         }
-        $this->toRespawn[$player->getName()] = $player;
-        $this->disconnectPlayer($player, "", true);
+
+        unset($this->players[$player->getName()]);
+        $this->spectators[$player->getName()] = $player;
 
         $deathMessage = $event->getDeathMessage();
         if ($deathMessage === null) {
@@ -356,15 +346,14 @@ class Arena implements Listener
     public function onRespawn(PlayerRespawnEvent $event)
     {
         $player = $event->getPlayer();
-        if (isset($this->toRespawn[$player->getName()])) {
-            $event->setRespawnPosition($this->plugin->getServer()->getDefaultLevel()->getSpawnLocation());
-            unset($this->toRespawn[$player->getName()]);
+        if ($this->isSpectator($player)) {
+            $event->setRespawnPosition($this->level->getSpawnLocation());
         }
     }
 
     public function onQuit(PlayerQuitEvent $event)
     {
-        if ($this->inGame($event->getPlayer())) {
+        if ($this->isInGame($event->getPlayer())) {
             $this->disconnectPlayer($event->getPlayer());
         }
     }
@@ -373,8 +362,8 @@ class Arena implements Listener
     {
         $player = $event->getEntity();
         if (!$player instanceof Player) return;
-        if ($this->inGame($player)) {
-            $this->disconnectPlayer($player, "You have been disconnected from the game.");
+        if ($this->isInGame($player)) {
+            $this->disconnectPlayer($player);
         }
     }
 
